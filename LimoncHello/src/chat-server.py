@@ -278,7 +278,6 @@ def get_pv_conv(user_request, name_target):
         return "NE"
     for conv in list_conv:
         if len(conv.users)==2 and user_request in conv.users and user_target in conv.users:
-            print(3)
             return conv
     # otherwise, create and return a new conversation
     conv = Conversation(len(list_conv))
