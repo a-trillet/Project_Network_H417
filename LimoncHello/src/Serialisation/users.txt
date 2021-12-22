@@ -1,0 +1,8 @@
+admin|admin
+morgan|morgan
+martin|martin
+gilles|gilles
+antoine|antoine
+papa|papa
+maman|maman
+t|t

@@ -1,4 +1,5 @@
 import socket
+import os
 import threading
 from Classes.User import User
 from Classes.Conversation import Conversation
@@ -7,20 +8,11 @@ from Classes.Message import Message
 # list of existing user that have an account already created
 list_users = []
 
-# list of existing conversations that have been created
+# list of existing conversation that have been created
 list_conv = []
 
-global searching_key
-searching_key = False
-global key_ex
-key_ex = ""
 def connectionThread(sock):
-
-    # Initialisation of the General conversation with everyone
-    list_users.append(User("admin", "admin"))    
-    
-    list_conv.append(Conversation(0))
-    list_conv[0].add_users(list_users)
+    load_database()
 
     # Accepts a connection request and stores both a socket object and its IP address
     while True:
@@ -30,25 +22,21 @@ def connectionThread(sock):
             print("Error while accepting incoming connections.")
             break
         print("{} is now connected.".format(address[0]))
-        
         threading.Thread(target=clientThread, args=(client,address,)).start()
 
 def clientThread(client, adrs):
-    global searching_key
-    global key_ex
     # Handles the client
     address = adrs[0]
     
-    #Connexion steps
+    #Connexion phase
     try:
         user = login(client)
         user.connect(client)
     except:
         print("Error while setting the username for {}.".format(address))
-       
         client.close()
         return    
-    print("{} is now logged in as {}".format(address ,user.name))
+    print("{} has logged in as {}".format(address ,user.name))
 
     try:
         client.send("Dear individual {}, You are now connected to LimoncHello. You can type \"/help\" for a list of the available commands.".format(user.name).encode("utf8"))
@@ -60,14 +48,10 @@ def clientThread(client, adrs):
 
     # Handles specific messages in a different way (user commands)
     current_conv=list_conv[0]
-    user.socket.send("/room 0".encode("utf8"))  #tells the client app in which room it is right now
-
+    user.socket.send("/room 0".encode("utf8")) #tells the client app in which room it is right now
     while True:
         try:
             message = client.recv(2048).decode("utf8")
-            if searching_key:
-                key_ex = message
-                message = client.recv(2048).decode("utf8")
             if message == "/help":
                 client.send("\nAvailable commands are :\
                     \n/quit to quit the chat app, \
@@ -90,48 +74,88 @@ def clientThread(client, adrs):
                 onlineUsers = ', '.join([user.name for user in list_users if user.socket!= "NE"])
                 client.send("Users online are: {}".format(onlineUsers).encode("utf8"))
             elif message == "/roommates":
-                pass
                 roommates = ', '.join([user.name for user in current_conv.users])
                 client.send("Your roommates are: {}".format(roommates).encode("utf8"))
+            elif message == "/room":
+                client.send("You're actually in room {}.".format(current_conv.idRoom).encode("utf8"))
             elif message == "/mp":
                 client.send("Who do you want to send a message to ?".encode("utf8"))
                 message = client.recv(2048).decode("utf8")
                 try :
                     conv = get_pv_conv(user,message)
                     if conv == "NE":
-                        client.send("{} doesn't exist in our database...".format(message).encode("utf8"))
+                        client.send("Error : {} doesn't exist in our database...".format(message).encode("utf8"))
                     else :
                         current_conv = conv
-                        key_exchange(conv)
-                        client.send("/room {} ".format(current_conv.idRoom).encode("utf8"))  #tells the client app in which room it is right now
-                        client.send("\nYou are in Room {} with {}".format(current_conv.idRoom,message).encode("utf8"))
+                        client.send("/room {}".format(current_conv.idRoom).encode("utf8"))
+                        client.send("You are in Room {} with {}".format(current_conv.idRoom,message).encode("utf8"))
                 except:
                     client.send("Unable to reach {}".format(message).encode("utf8"))
             elif message=="/conv":
-                print("ici")
-                potential_new_room = get_conv(user)
-                print("la"+str(potential_new_room))
-                if potential_new_room != "NE":
-                    current_conv=list_conv[potential_new_room]
-                    client.send("You are in Room {} with {}".format(current_conv.idRoom,', '.join([u.name for u in current_conv.users])).encode("utf8"))
-
+                client.send("Who do you want to add in your conversation ? Type /ok when you have finished adding people".encode("utf8"))
+                list_people = [user]
+                while message!="/ok":
+                    message = client.recv(2048).decode("utf8")
+                    usr = get_usr_from_nickname(message)
+                    if message=="/ok":
+                        pass
+                    elif usr=="NE":
+                        client.send("{} doesn't exits".format(message).encode("utf8"))    
+                    elif usr in list_people :
+                        client.send("{} already added".format(message).encode("utf8"))
+                    else :
+                        list_people.append(usr)
+                conv = Conversation(len(list_conv))
+                client.send("The number of your room is {}. Type /join to join it.".format(conv.idRoom).encode("utf8"))
+                conv.add_users(list_people)
+                list_conv.append(conv)
+                conv.save()
+            elif message=="/join":
+                client.send("What is the number of the room that you want to join ?".encode("utf8"))
+                message = client.recv(2048).decode("utf8")
+                id_rooms = []
+                for co in list_conv:
+                    if user in co.users:
+                        id_rooms.append(int(co.idRoom))
+                if int(message) not in id_rooms:
+                    client.send("You can't join room {}. Type /display to see your conversations.".format(message).encode("utf8"))
+                else:
+                    potential_new_room = int(message)
+                    if potential_new_room != "NE":
+                        current_conv=list_conv[potential_new_room]
+                        client.send("/room {}".format(current_conv.idRoom).encode("utf8"))
+                        client.send("You are in Room {} with {}".format(current_conv.idRoom,', '.join([u.name for u in current_conv.users])).encode("utf8"))
+                        current_conv.save()       
+            elif message=="/display":
+                rooms = []
+                for c in list_conv:
+                    if user in c.users:
+                        rooms.append(c)
+                str = ""
+                for r in rooms:
+                    str += "\nRoom {} : ".format(r.idRoom) + ', '.join([u.name for u in r.users ])
+                client.send(str.encode("utf8"))
             elif message=="/lobby":
                 current_conv=list_conv[0]
+                client.send("/room 0".encode("utf8"))
+                client.send("You're back in the lobby !")
+            elif message=="/load":
+                user.load(current_conv)
             elif message[0] == "/":
-                client.send("Command {} not recognised. Type /help to see the available commands.".format(message).encode("utf8"))
+                client.send("Command {} not recognised. Type /help to see available commands.".format(message).encode("utf8"))
             else:
-                print("{} ({}): {}".format(address, user.name, message))
+                print("{} ({}) in (Room {}): {}".format(address, user.name, current_conv.idRoom ,message))
                 current_conv.send_message(message, user.name)
         except:
             print("{} ({}) has left.".format(address, user.name))
             user.unconnect()
             client.close()
-            broadcast("{} has abandoned you.".format(user.name), "SERVER")
+            broadcast("{} has abandoned you.".format(user.name))
             break
 
 def login(client):
     message = ""
-    client.send("Welcome to LimoncHello.".encode("utf8"))
+    client.send("Welcome to LimoncHello!".encode("utf8"))
 
     while message not in ["/s", "/l"]: 
         client.send(" Type (/l) to login or (/s) to subscribe :".encode("utf8"))
@@ -160,12 +184,12 @@ def subscribe(client):
             if username not in names:
                 alreadyTaken = False
     client.send("Choose your password:".encode("utf8"))
-   
     pw = client.recv(2048).decode("utf8")
     u = User(username, pw)
-    
+    u.save()    
     list_users.append(u)
     list_conv[0].add_user(u) #add the users to the main conversation (Room 0)
+    list_conv[0].save() 
     return u
 
 def log(client):
@@ -176,7 +200,7 @@ def log(client):
     idx = -1
 
     while username not in names:
-        client.send("This username isn't in the database... Try again :".encode("utf8"))
+        client.send("This username isn't in our database... Try again :".encode("utf8"))
         username = client.recv(2048).decode("utf8")
 
     idx = names.index(username)
@@ -188,13 +212,11 @@ def log(client):
         while user.password != pw:
             client.send("Wrong password, please try again :".encode("utf8"))
             pw = client.recv(2048).decode("utf8")
-    else :
-        print("Error while logging in")
 
     return user
 
 def broadcast(message, sentBy = "SERVER"):
-    # send a message to all the connected users (Room 0)
+    # send a message to all users connected (Room 0)
     try:
         list_conv[0].send_message(message, sentBy)
     except:
@@ -203,79 +225,22 @@ def broadcast(message, sentBy = "SERVER"):
 
 
 # function to return user for a username 'val'
-def get_usr_from_username(val):
+def get_usr_from_nickname(val):
     for usr in list_users:
         if usr.name == val:
             return usr
     return "NE"
 
-def get_conv(user):
-    client = user.socket
-    message="/help"
-    while message!="/end":
-        if message=="/help":
-            client.send("\nAvailable commands are :\
-                \n/display to see current conversations,\
-                \n/create to create a new conversation,\
-                \n/join \
-                \n/delete to delete a conversation,\
-                \n/end to quit this configuration mode".encode("utf8"))
-        elif message=="/create":
-            client.send("Who do you want to add in your conversation ? Type /ok when you have finished adding people".encode("utf8"))
-            list_people = [user]
-            while message!="/ok":
-                message = client.recv(2048).decode("utf8")
-                usr = get_usr_from_username(message)
-                if message=="/ok":
-                    pass
-                elif usr=="NE":
-                    client.send("{} doesn't exits".format(message).encode("utf8"))    
-                elif usr in list_people :
-                    client.send("{} already added".format(message).encode("utf8"))
-                else :
-                    list_people.append(usr)
-            conv = Conversation(len(list_conv))
-            client.send("The number of your room is {}. Type /join to join it.".format(conv.idRoom).encode("utf8"))
-            conv.add_users(list_people)
-            list_conv.append(conv)
-            
-        elif message=="/join":
-            client.send("What is the number of the room that you want to join ?".encode("utf8"))
-            message = client.recv(2048).decode("utf8")
-            id_rooms = []
-            for co in list_conv:
-                if user in co.users:
-                    id_rooms.append(int(co.idRoom))
-            if int(message) not in id_rooms:
-                client.send("You can't join room {}. Type /display to see your conversations.".format(message).encode("utf8"))
-            else:
-                return int(message)           
-        elif message=="/display":
-            rooms = []
-            for c in list_conv:
-                if user in c.users:
-                    rooms.append(c)
-            str = ""
-            for r in rooms:
-                str += "\n-Room {} : ".format(r.idRoom) + ', '.join([u.name for u in r.users ]) 
-            client.send(str.encode("utf8"))
-        elif message=="/delete":
-            pass
-        message = client.recv(2048).decode("utf8")
-    client.send("You've succesfully quitted the /conv configuration".encode("utf8"))
-    return "NE"
- 
-
-
-
 # Get a conversation between an existing user (user_target) and potentially someone with the username (name_target)
 def get_pv_conv(user_request, name_target):
     
     # check if target exists
-    user_target=get_usr_from_username(name_target)  
+    user_target=get_usr_from_nickname(name_target)  
     # check if conversation between the two already exists
+    
     if user_target=="NE":
         return "NE"
+    
     for conv in list_conv:
         if len(conv.users)==2 and user_request in conv.users and user_target in conv.users:
             return conv
@@ -283,42 +248,40 @@ def get_pv_conv(user_request, name_target):
     conv = Conversation(len(list_conv))
     list_conv.append(conv)
     conv.add_users([user_request,user_target])
+    conv.save()
     return conv
 
-def key_exchange(conv):
-    #key exchange initialized and facilitated by the server 
-    global searching_key
-    global key_ex
-    users = conv.users
-    print(users[0].name)
-    sock1 = users[0].socket
-    print(sock1)
-    sock2 = users[1].socket
-    print(sock2)
-    try: 
-        sock1.send('/Key {}'.format(conv.idRoom).encode('utf8'))
-        key1 = sock1.recv(2048).decode("utf8")
-    except: 
-        print("problem with key echange from ", users[0].name)
-    try: 
-        searching_key = True
-        sock2.send('/Key {}'.format(conv.idRoom).encode('utf8'))
-        while key_ex == "":
-            a=1
-        key2 = key_ex
-        key_ex = ""
-        searching_key = False
-    except:
-        print("problem with key echange from ", users[1].name)
-    try: 
-        sock1.send(key2.encode('utf8'))
-    except: 
-        print("problem with key echange from ", users[0].name)
-    try: 
-        sock2.send(key1.encode('utf8'))
-    except:
-        print("problem with key echange from ", users[1].name)
+def load_database():
+    # get users informations
+    file = open("./Serialisation/users.txt","r")
+    for line in file.readlines():
+        x=line.strip("\n").split("|")
+        if get_usr_from_nickname(x[0])=="NE":
+            list_users.append(User(x[0],x[1]))
+    file.close()
 
+    # get conversations informations
+    i=0
+    while os.path.isfile("./Serialisation/Conversations/conv{}.txt".format(i)):
+        f = open("./Serialisation/Conversations/conv{}.txt".format(i),"r")
+        lines = f.readlines()
+        conv = Conversation(i)
+        nicknames = lines[0].strip("\n").split("|")
+
+        for n in nicknames:
+            u=get_usr_from_nickname(n)
+            if u != "NE":
+                conv.add_user(u)
+            else :
+                print("Error while loading conversation {} : user '{}' in conversation but not in existing user...".format(i, n))
+
+        for li in lines[1:len(lines)]:
+            s = li.split("|")
+            conv.add_message(s[0],s[1],s[2])
+        list_conv.append(conv)
+        i+=1
+        
+    return
 
 def main():
     # host and port for the server
@@ -326,7 +289,9 @@ def main():
     port = 25000
 
     # Creates the socket
-    serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    socketFamily = socket.AF_INET
+    socketType = socket.SOCK_STREAM
+    serverSocket = socket.socket(socketFamily, socketType)
 
     # Binds the serverSocket to the port number
     serverSocket.bind((host, port))
@@ -334,21 +299,18 @@ def main():
     # Enables accepting connections
     serverSocket.listen()
 
-    print("LimoncHello server is running.")
-    print("Waiting for new connections on port {}.".format(port))
+    print("LimoncHello server is up and running!")
+    print("Listening for new connections on port {}.".format(port))
 
-    # Threads for each connection
+    #Threads for each connection
     connThread = threading.Thread(target=connectionThread, args=(serverSocket,))
     connThread.start()
-    # Waits until it ends
+    # Waits for it to end
     connThread.join()
 
     # Closes socket connection
     serverSocket.close()
-    print("Server is closed.")
-
-
-
+    print("Server has shut down.")
 
 
 if __name__ == "__main__":
